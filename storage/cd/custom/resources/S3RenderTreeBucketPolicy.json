@@ -1,0 +1,43 @@
+{
+  "S3RenderTreeBucketPolicy": {
+    "Type": "AWS::IAM::Policy",
+    "Properties": {
+      "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": [
+              "*"
+            ],
+            "Resource": "arn:aws:s3:::render-tree*"
+          }
+        ]
+      },
+      "PolicyName": {
+        "Fn::Join": [
+          "-",
+          [
+            "access-to-s3-rendertree",
+            {
+              "Ref": "AppName"
+            },
+            {
+              "Ref": "AppEnv"
+            }
+          ]
+        ]
+      },
+      "Roles": [
+        {
+          "Ref": "RootRole"
+        }
+      ],
+      "Groups": [
+        {
+          "Ref": "AppGroup"
+        }
+      ]
+    }
+  }
+}

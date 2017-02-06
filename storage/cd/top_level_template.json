@@ -1,0 +1,2015 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "EC2 Default VPC and most needed services and policies",
+    "Conditions": {
+        "CreateCodeDeployApplication": {
+            "Fn::Equals": [
+                {
+                    "Ref": "CodeDeployAppExisted"
+                },
+                "no"
+            ]
+        },
+        "CreateS3ForLocal": {
+            "Fn::Equals": [
+                {
+                    "Ref": "CreateS3ForLocal"
+                },
+                "yes"
+            ]
+        }
+    },
+    "Resources": {
+        "CodeDeployApplication": {
+            "Type": "AWS::CodeDeploy::Application",
+            "Condition": "CreateCodeDeployApplication",
+            "Properties": {
+                "ApplicationName": {
+                    "Ref": "AppName"
+                }
+            }
+        },
+        "DeploymentGroupWorker": {
+            "Description": "Create a deployment group",
+            "Type": "AWS::CodeDeploy::DeploymentGroup",
+            "Properties": {
+                "ApplicationName": {
+                    "Ref": "AppName"
+                },
+                "DeploymentConfigName": "CodeDeployDefault.AllAtOnce",
+                "DeploymentGroupName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Ec2TagFilters": [
+                    {
+                        "Key": "instance",
+                        "Value": {
+                            "Fn::Join": [
+                                "-",
+                                [
+                                    {
+                                        "Ref": "AppName"
+                                    },
+                                    {
+                                        "Ref": "AppEnv"
+                                    }
+                                ]
+                            ]
+                        },
+                        "Type": "KEY_AND_VALUE"
+                    }
+                ],
+                "ServiceRoleArn": "arn:aws:iam::086248658372:role/code-deploy-base-build"
+            }
+        },
+        "FixedAppValues": {
+            "Type": "Custom::FixedAppValues",
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "GetFixedAppValues",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+        "GetFixedAppValues": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "index.handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "var response = require('cfn-response');",
+                                "exports.handler = function(event, context) {",
+                                "   for (var appkey = ''; appkey.length < 32;) appkey += Math.random().toString(36).substr(2, 1);",
+                                "   var responseData = { AppKey: appkey };",
+                                "   response.send(event, context, response.SUCCESS, responseData);",
+                                "};"
+                            ]
+                        ]
+                    }
+                },
+                "Runtime": "nodejs4.3"
+            }
+        },
+        "EnvWorker": {
+            "Type": "Custom::ENV",
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "GetEnv",
+                        "Arn"
+                    ]
+                },
+                "BuildVersion": {
+                    "Ref": "BuildVersion"
+                },
+                "IsShadow": false
+            }
+        },
+        "GetEnv": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "index.handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "var response = require('cfn-response');",
+                                "exports.handler = function(event, context) {",
+                                "   var isShadow = event.ResourceProperties.IsShadow;",
+                                "   var envVars = [",
+                                "['APP_NAME', '",
+                                {
+                                    "Ref": "AppName"
+                                },
+                                "'],",
+                                "['APP_KEY', '",
+                                {
+                                    "Fn::GetAtt": [
+                                        "FixedAppValues",
+                                        "AppKey"
+                                    ]
+                                },
+                                "'],",
+                                "['APP_DEBUG', 'false'],",
+                                "['QUEUE_DRIVER', 'sqs'],",
+                                "['DB_CONNECTION', 'mysql'],",
+                                "['AWS_REGION', '",
+                                {
+                                    "Ref": "AWS::Region"
+                                },
+                                "'],",
+                                "['SHADOW_SUFFIX', ",
+                                " (isShadow + '') == 'true' ? '-shadow' : '' ],",
+                                "['AWS_SECRET_ACCESS_KEY', '",
+                                {
+                                    "Fn::GetAtt": [
+                                        "UserAccessKey",
+                                        "SecretAccessKey"
+                                    ]
+                                },
+                                "'],",
+                                "['AWS_ACCESS_KEY_ID', '",
+                                {
+                                    "Ref": "UserAccessKey"
+                                },
+                                "']",
+                                "];",
+                                "   var env = '';",
+                                "   var envArrayStr = [];",
+                                "   for (var i = 0; i < envVars.length; i++) {",
+                                "       envArrayStr.push('[' + \"'\" + envVars[i][0] + \"','\" + envVars[i][1] + \"'\" + ']');",
+                                "       env += envVars[i][0] + '=' + envVars[i][1] + '\\n';",
+                                "   }",
+                                "   envArrayStr = '[' + envArrayStr.join(',') + ']';",
+                                "   var responseData = { Array: envArrayStr, Env: env };",
+                                "   response.send(event, context, response.SUCCESS, responseData);",
+                                "};"
+                            ]
+                        ]
+                    }
+                },
+                "Runtime": "nodejs4.3"
+            }
+        },
+        "GlobalSettingsAnsibleCommandA": {
+            "Type": "Custom::AnsibleCommand",
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "GetGlobalSettingsAnsibleCommandA",
+                        "Arn"
+                    ]
+                },
+                "BuildVersion": {
+                    "Ref": "BuildVersion"
+                }
+            }
+        },
+        "GetGlobalSettingsAnsibleCommandA": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "index.handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "ZipFile": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "var response = require('cfn-response');",
+                                "exports.handler = function(event, context) {",
+                                "   var envArrayStr = ",
+                                "\"",
+                                {
+                                    "Fn::GetAtt": [
+                                        "EnvWorker",
+                                        "Array"
+                                    ]
+                                },
+                                "\";",
+                                "   var command = \"",
+                                "ansible-playbook --limit localhost /home/ubuntu/base-ec2/global_system_settings.yml -u ubuntu -i 'localhost' --module-path=/home/ubuntu/base-ec2/custom_modules --extra-vars ",
+                                "\\\"{'app_env': '",
+                                {
+                                    "Ref": "AppEnv"
+                                },
+                                "', 'fixed_envs': ['APP_KEY'],",
+                                "'env_vars': ",
+                                "\"",
+                                " + envArrayStr + ",
+                                "\" ",
+                                "}",
+                                "\\\"",
+                                "\";",
+                                "   var responseData = { Command: command };",
+                                "   response.send(event, context, response.SUCCESS, responseData);",
+                                "};"
+                            ]
+                        ]
+                    }
+                },
+                "Runtime": "nodejs4.3"
+            }
+        },
+        "LambdaExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "root",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:*"
+                                    ],
+                                    "Resource": "arn:aws:logs:*:*:*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "AppGroup": {
+            "Type": "AWS::IAM::Group"
+        },
+        "AddUserToGroup": {
+            "Type": "AWS::IAM::UserToGroupAddition",
+            "Properties": {
+                "GroupName": {
+                    "Ref": "AppGroup"
+                },
+                "Users": [
+                    {
+                        "Ref": "AppUser"
+                    }
+                ]
+            }
+        },
+        "UserAccessKey": {
+            "Type": "AWS::IAM::AccessKey",
+            "Properties": {
+                "UserName": {
+                    "Ref": "AppUser"
+                }
+            },
+            "DependsOn": [
+                "AppUser"
+            ]
+        },
+        "AppUser": {
+            "Type": "AWS::IAM::User",
+            "Properties": {
+                "Path": "/"
+            },
+            "DependsOn": [
+                "AppGroup"
+            ]
+        },
+        "WebServerSecurityGroup": {
+            "Type": "AWS::EC2::SecurityGroup",
+            "Properties": {
+                "GroupDescription": "Web Server Security Ports",
+                "SecurityGroupIngress": [
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "443",
+                        "ToPort": "443",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "80",
+                        "ToPort": "80",
+                        "CidrIp": "0.0.0.0/0"
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "22",
+                        "ToPort": "22",
+                        "CidrIp": {
+                            "Ref": "SSHLocation"
+                        }
+                    },
+                    {
+                        "IpProtocol": "tcp",
+                        "FromPort": "3306",
+                        "ToPort": "3306",
+                        "CidrIp": "0.0.0.0/0"
+                    }
+                ],
+                "Tags": [
+                    {
+                        "Key": "project",
+                        "Value": {
+                            "Fn::Join": [
+                                "",
+                                [
+                                    {
+                                        "Ref": "AppName"
+                                    },
+                                    {
+                                        "Ref": "AppEnv"
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            },
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "7fb32c4b-994a-46fa-9b5b-02de77238338"
+                }
+            }
+        },
+        "S3LocalBucket": {
+            "Type": "AWS::S3::Bucket",
+            "Condition": "CreateS3ForLocal",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "cat",
+                            {
+                                "Ref": "AppName"
+                            },
+                            "local"
+                        ]
+                    ]
+                },
+                "Tags": [
+                    {
+                        "Key": "project",
+                        "Value": {
+                            "Fn::Join": [
+                                "-",
+                                [
+                                    {
+                                        "Ref": "AppName"
+                                    },
+                                    "local"
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "S3Bucket": {
+            "Type": "AWS::S3::Bucket",
+            "Properties": {
+                "BucketName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "cat",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Tags": [
+                    {
+                        "Key": "project",
+                        "Value": {
+                            "Fn::Join": [
+                                "-",
+                                [
+                                    {
+                                        "Ref": "AppName"
+                                    },
+                                    {
+                                        "Ref": "AppEnv"
+                                    }
+                                ]
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "DynamoDBPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "DynamoDBConsolePermissions",
+                            "Action": [
+                                "dynamodb:*",
+                                "cloudwatch:DeleteAlarms",
+                                "cloudwatch:DescribeAlarmHistory",
+                                "cloudwatch:DescribeAlarms",
+                                "cloudwatch:DescribeAlarmsForMetric",
+                                "cloudwatch:GetMetricStatistics",
+                                "cloudwatch:ListMetrics",
+                                "cloudwatch:PutMetricAlarm",
+                                "datapipeline:ActivatePipeline",
+                                "datapipeline:CreatePipeline",
+                                "datapipeline:DeletePipeline",
+                                "datapipeline:DescribeObjects",
+                                "datapipeline:DescribePipelines",
+                                "datapipeline:GetPipelineDefinition",
+                                "datapipeline:ListPipelines",
+                                "datapipeline:PutPipelineDefinition",
+                                "datapipeline:QueryObjects",
+                                "iam:ListRoles",
+                                "sns:CreateTopic",
+                                "sns:DeleteTopic",
+                                "sns:ListSubscriptions",
+                                "sns:ListSubscriptionsByTopic",
+                                "sns:ListTopics",
+                                "sns:Subscribe",
+                                "sns:Unsubscribe"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:dynamodb:us-east-1:086248658372:table/",
+                                        {
+                                            "Fn::Join": [
+                                                "-",
+                                                [
+                                                    {
+                                                        "Ref": "AppName"
+                                                    },
+                                                    "default",
+                                                    {
+                                                        "Ref": "AppEnv"
+                                                    }
+                                                ]
+                                            ]
+                                        }
+                                    ]
+                                ]
+                            }
+                        },
+                        {
+                            "Sid": "DynamoDBConsolePermissions2",
+                            "Action": [
+                                "dynamodb:*",
+                                "cloudwatch:DeleteAlarms",
+                                "cloudwatch:DescribeAlarmHistory",
+                                "cloudwatch:DescribeAlarms",
+                                "cloudwatch:DescribeAlarmsForMetric",
+                                "cloudwatch:GetMetricStatistics",
+                                "cloudwatch:ListMetrics",
+                                "cloudwatch:PutMetricAlarm",
+                                "datapipeline:ActivatePipeline",
+                                "datapipeline:CreatePipeline",
+                                "datapipeline:DeletePipeline",
+                                "datapipeline:DescribeObjects",
+                                "datapipeline:DescribePipelines",
+                                "datapipeline:GetPipelineDefinition",
+                                "datapipeline:ListPipelines",
+                                "datapipeline:PutPipelineDefinition",
+                                "datapipeline:QueryObjects",
+                                "iam:ListRoles",
+                                "sns:CreateTopic",
+                                "sns:DeleteTopic",
+                                "sns:ListSubscriptions",
+                                "sns:ListSubscriptionsByTopic",
+                                "sns:ListTopics",
+                                "sns:Subscribe",
+                                "sns:Unsubscribe"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:dynamodb:us-east-1:086248658372:table/",
+                                        {
+                                            "Fn::Join": [
+                                                "-",
+                                                [
+                                                    {
+                                                        "Ref": "AppName"
+                                                    },
+                                                    "example",
+                                                    {
+                                                        "Ref": "AppEnv"
+                                                    }
+                                                ]
+                                            ]
+                                        }
+                                    ]
+                                ]
+                            }
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-dynamo",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        },
+        "S3BucketPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Fn::Join": [
+                                                    "-",
+                                                    [
+                                                        "cat",
+                                                        {
+                                                            "Ref": "AppName"
+                                                        },
+                                                        {
+                                                            "Ref": "AppEnv"
+                                                        }
+                                                    ]
+                                                ]
+                                            }
+                                        ]
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "*"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Fn::Join": [
+                                                    "-",
+                                                    [
+                                                        "cat",
+                                                        {
+                                                            "Ref": "AppName"
+                                                        },
+                                                        {
+                                                            "Ref": "AppEnv"
+                                                        }
+                                                    ]
+                                                ]
+                                            },
+                                            "/*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-s3-default",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        },
+        "S3LocalBucketPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Condition": "CreateS3ForLocal",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Fn::Join": [
+                                                    "-",
+                                                    [
+                                                        "cat",
+                                                        {
+                                                            "Ref": "AppName"
+                                                        },
+                                                        "local"
+                                                    ]
+                                                ]
+                                            }
+                                        ]
+                                    ]
+                                }
+                            ]
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "*"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::",
+                                            {
+                                                "Fn::Join": [
+                                                    "-",
+                                                    [
+                                                        "cat",
+                                                        {
+                                                            "Ref": "AppName"
+                                                        },
+                                                        "local"
+                                                    ]
+                                                ]
+                                            },
+                                            "/*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-s3-local",
+                            {
+                                "Ref": "AppName"
+                            },
+                            "local"
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        },
+        "DeploymentPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Action": [
+                                "codedeploy:Batch*",
+                                "codedeploy:CreateDeployment",
+                                "codedeploy:Get*",
+                                "codedeploy:List*",
+                                "codedeploy:RegisterApplicationRevision"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:codedeploy:us-east-1:086248658372:deploymentgroup:",
+                                            {
+                                                "Ref": "AppName"
+                                            },
+                                            "/*"
+                                        ]
+                                    ]
+                                },
+                                "arn:aws:codedeploy:us-east-1:086248658372:deploymentconfig:CodeDeployDefault.AllAtOnce",
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:codedeploy:us-east-1:086248658372:application:",
+                                            {
+                                                "Ref": "AppName"
+                                            }
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-deployment",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        },
+        "S3ProvisionPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AllowAccessToTheBaseBucketAtAConsoleLevel",
+                            "Action": [
+                                "s3:ListAllMyBuckets",
+                                "s3:GetBucketLocation"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                "arn:aws:s3:::*"
+                            ]
+                        },
+                        {
+                            "Sid": "AllowListingOfTheRootFolder",
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                "arn:aws:s3:::cat-provision-config"
+                            ],
+                            "Condition": {
+                                "StringEquals": {
+                                    "s3:prefix": [
+                                        "",
+                                        {
+                                            "Ref": "AppName"
+                                        }
+                                    ],
+                                    "s3:delimiter": [
+                                        "/"
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "Sid": "AllowSpecificAccessToTheAppFolder",
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Effect": "Allow",
+                            "Resource": [
+                                "arn:aws:s3:::cat-provision-config"
+                            ],
+                            "Condition": {
+                                "StringLike": {
+                                    "s3:prefix": [
+                                        {
+                                            "Fn::Join": [
+                                                "",
+                                                [
+                                                    {
+                                                        "Ref": "AppName"
+                                                    },
+                                                    "/*"
+                                                ]
+                                            ]
+                                        }
+                                    ]
+                                }
+                            }
+                        },
+                        {
+                            "Sid": "AllowAllS3ActionsToAppFolder",
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:*"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:s3:::cat-provision-config/",
+                                            {
+                                                "Ref": "AppName"
+                                            },
+                                            "/*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-s3-policies",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        },
+        "ProvisionScripts": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Resource": [
+                                "arn:aws:s3:::cat-provision-config"
+                            ]
+                        },
+                        {
+                            "Sid": "Stmt1452005994000",
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:GetObject",
+                                "s3:PutObject"
+                            ],
+                            "Resource": [
+                                "arn:aws:s3:::cat-provision-config/*"
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "cat-provision-config",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ]
+            },
+            "DependsOn": [
+                "RootRole"
+            ]
+        },
+        "SSHKeys": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Resource": [
+                                "arn:aws:s3:::ssh-public-keys-cloud-app-team"
+                            ]
+                        },
+                        {
+                            "Sid": "Stmt1452005994000",
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:GetObject",
+                                "s3:PutObject"
+                            ],
+                            "Resource": [
+                                "arn:aws:s3:::ssh-public-keys-cloud-app-team/*"
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-ssh-keys",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ]
+            }
+        },
+        "CodeDeployArtifacts": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:ListBucket"
+                            ],
+                            "Resource": [
+                                "arn:aws:s3:::cat-provision-config"
+                            ]
+                        },
+                        {
+                            "Sid": "Stmt1452005994000",
+                            "Effect": "Allow",
+                            "Action": [
+                                "s3:GetObject",
+                                "s3:PutObject"
+                            ],
+                            "Resource": [
+                                "arn:aws:s3:::cat-provision-config/*"
+                            ]
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "code-deploy-artifacts",
+                            {
+                                "Ref": "AppName"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ]
+            },
+            "DependsOn": [
+                "RootRole"
+            ]
+        },
+        "RootRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "ec2.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                },
+                "Path": "/"
+            },
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "ac04a95a-78d2-4b8d-992f-6c4ec711d71b"
+                }
+            }
+        },
+        "RootInstanceProfile": {
+            "Type": "AWS::IAM::InstanceProfile",
+            "Properties": {
+                "Path": "/",
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ]
+            },
+            "Metadata": {
+                "AWS::CloudFormation::Designer": {
+                    "id": "0f1f3337-874e-4bc1-96f9-318ef9e1caf2"
+                }
+            }
+        },
+        "S3RenderTreeBucketPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "*"
+                            ],
+                            "Resource": "arn:aws:s3:::render-tree*"
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "access-to-s3-rendertree",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        },
+        "SQSCompleteQueue": {
+            "Type": "AWS::SQS::Queue",
+            "Properties": {
+                "QueueName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            },
+                            "complete"
+                        ]
+                    ]
+                },
+                "RedrivePolicy": {
+                    "deadLetterTargetArn": {
+                        "Fn::GetAtt": [
+                            "SQSFailedQueue",
+                            "Arn"
+                        ]
+                    },
+                    "maxReceiveCount": 3
+                }
+            }
+        },
+        "SQSFailedQueue": {
+            "Type": "AWS::SQS::Queue",
+            "Properties": {
+                "QueueName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            },
+                            "failed"
+                        ]
+                    ]
+                }
+            }
+        },
+        "SQSJobQueue": {
+            "Type": "AWS::SQS::Queue",
+            "Properties": {
+                "QueueName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            },
+                            "job"
+                        ]
+                    ]
+                },
+                "RedrivePolicy": {
+                    "deadLetterTargetArn": {
+                        "Fn::GetAtt": [
+                            "SQSFailedQueue",
+                            "Arn"
+                        ]
+                    },
+                    "maxReceiveCount": 3
+                },
+                "VisibilityTimeout": 600
+            }
+        },
+        "SQSQueuesPolicy": {
+            "Type": "AWS::IAM::Policy",
+            "Properties": {
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:sqs:us-east-1:086248658372:",
+                                        {
+                                            "Ref": "AppName"
+                                        },
+                                        "-",
+                                        {
+                                            "Ref": "AppEnv"
+                                        },
+                                        "-*"
+                                    ]
+                                ]
+                            },
+                            "Action": [
+                                "sqs:*"
+                            ],
+                            "Effect": "Allow"
+                        }
+                    ]
+                },
+                "PolicyName": {
+                    "Fn::Join": [
+                        "-",
+                        [
+                            "wildcard-access-to-sqs",
+                            {
+                                "Ref": "AppName"
+                            },
+                            {
+                                "Ref": "AppEnv"
+                            }
+                        ]
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "RootRole"
+                    }
+                ],
+                "Groups": [
+                    {
+                        "Ref": "AppGroup"
+                    }
+                ]
+            }
+        }
+    },
+    "Metadata": {
+        "AWS::CloudFormation::Interface": {
+            "ParameterGroups": [
+                {
+                    "Label": {
+                        "default": "App environment information"
+                    },
+                    "Parameters": [
+                        "BuildVersion",
+                        "AppName",
+                        "AppEnv",
+                        "KeyName",
+                        "InstanceType",
+                        "AMIID",
+                        "DBAllocatedStorage",
+                        "DBInstanceClass",
+                        "MultiAZDatabase",
+                        "SSHLocation"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "S3"
+                    },
+                    "Parameters": [
+                        "CreateS3ForLocal"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "CodeDeploy"
+                    },
+                    "Parameters": [
+                        "CodeDeployAppExisted"
+                    ]
+                }
+            ],
+            "ParameterLabels": {
+                "VPCID": {
+                    "default": "Which VPC should this be deployed to?"
+                }
+            }
+        },
+        "AWS::CloudFormation::Designer": {
+            "7fb32c4b-994a-46fa-9b5b-02de77238338": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 150,
+                    "y": 120
+                },
+                "z": 1,
+                "embeds": []
+            },
+            "acb0bd5d-66fd-4934-8d3d-02e24176ca15": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 300,
+                    "y": 120
+                },
+                "z": 1,
+                "embeds": [],
+                "ismemberof": [
+                    "7fb32c4b-994a-46fa-9b5b-02de77238338"
+                ]
+            },
+            "e49d255b-9840-48ab-bb43-88bce228eae1": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 420,
+                    "y": 120
+                },
+                "z": 1,
+                "embeds": [],
+                "isconnectedto": [
+                    "acb0bd5d-66fd-4934-8d3d-02e24176ca15"
+                ],
+                "dependson": [
+                    "acb0bd5d-66fd-4934-8d3d-02e24176ca15"
+                ]
+            },
+            "367a9eb5-399c-4894-90c3-582e147cc46b": {
+                "source": {
+                    "id": "e49d255b-9840-48ab-bb43-88bce228eae1"
+                },
+                "target": {
+                    "id": "acb0bd5d-66fd-4934-8d3d-02e24176ca15"
+                },
+                "z": 11
+            },
+            "da9f801e-8c10-496d-a337-0ea73979ada5": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 510,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": [],
+                "isrelatedto": [
+                    "acb0bd5d-66fd-4934-8d3d-02e24176ca15"
+                ]
+            },
+            "f83ce409-f1be-4014-9dcc-580144fa5f24": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 510,
+                    "y": 210
+                },
+                "z": 1,
+                "embeds": [],
+                "ismemberof": [
+                    "7fb32c4b-994a-46fa-9b5b-02de77238338"
+                ]
+            },
+            "974d28ec-460c-4043-bae2-3d94fb5ef4b1": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 600,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": [],
+                "isrelatedto": [
+                    "7fb32c4b-994a-46fa-9b5b-02de77238338"
+                ]
+            },
+            "8dd31d98-9685-450d-90d8-313c7199c96f": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 360,
+                    "y": 210
+                },
+                "z": 1,
+                "embeds": []
+            },
+            "825e3b4b-3984-4dbd-94bb-0a8072bcaebb": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 234.23492668794,
+                    "y": 194.46334686459
+                },
+                "z": 0
+            },
+            "ddae177d-8931-4ccd-89f9-7e2000cdc201": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 230,
+                    "y": 210
+                },
+                "z": 0,
+                "dependson": [
+                    "acb0bd5d-66fd-4934-8d3d-02e24176ca15"
+                ]
+            },
+            "3ca30240-f2db-47af-b064-103320289a9f": {
+                "source": {
+                    "id": "ddae177d-8931-4ccd-89f9-7e2000cdc201"
+                },
+                "target": {
+                    "id": "acb0bd5d-66fd-4934-8d3d-02e24176ca15"
+                },
+                "z": 2
+            },
+            "39eaf942-b51f-41ab-8d82-ad88d493dd39": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 85.770179674205,
+                    "y": 213.53492626794
+                },
+                "z": 0
+            },
+            "ac04a95a-78d2-4b8d-992f-6c4ec711d71b": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 690,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": []
+            },
+            "0f1f3337-874e-4bc1-96f9-318ef9e1caf2": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 810,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": [],
+                "isassociatedwith": [
+                    "ac04a95a-78d2-4b8d-992f-6c4ec711d71b"
+                ]
+            },
+            "8fc3254c-76cf-4f31-8f5e-758a374a5173": {
+                "size": {
+                    "width": 60,
+                    "height": 60
+                },
+                "position": {
+                    "x": 930,
+                    "y": 90
+                },
+                "z": 1,
+                "embeds": [],
+                "isassociatedwith": [
+                    "ac04a95a-78d2-4b8d-992f-6c4ec711d71b"
+                ],
+                "dependson": [
+                    "ac04a95a-78d2-4b8d-992f-6c4ec711d71b"
+                ]
+            },
+            "f4e485b1-3a7f-4869-9d95-3ac5130cab26": {
+                "source": {
+                    "id": "8fc3254c-76cf-4f31-8f5e-758a374a5173"
+                },
+                "target": {
+                    "id": "ac04a95a-78d2-4b8d-992f-6c4ec711d71b"
+                },
+                "z": 11
+            }
+        }
+    },
+    "Parameters": {
+        "BuildVersion": {
+            "Description": "Build Version (semantic versioning). Needs to be different every time you make an update",
+            "Type": "String",
+            "MinLength": 1,
+            "AllowedPattern": "^(\\d+\\.)?(\\d+\\.)?(\\*|\\d+)$",
+            "ConstraintDescription": "must use semantic versioning"
+        },
+        "AppName": {
+            "Description": "smartcompare, smarttest or crt (all lowercase, can have number), etc.",
+            "Type": "String",
+            "AllowedPattern": "[a-z0-9]+",
+            "ConstraintDescription": "must only contain (lowercase) alphanumeric characters",
+            "MinLength": "1"
+        },
+        "AppEnv": {
+            "Description": "e.g. stage, production (lowercase). This will set the APP_ENV",
+            "Type": "String",
+            "AllowedPattern": "[a-z]+",
+            "ConstraintDescription": "must only contain lowercase letters",
+            "MinLength": "1"
+        },
+        "CodeDeployAppExisted": {
+            "Description": "Select **no** if this is the first time you are building CloudFormation for your Project. Then when you build the second CloudFormation stack for this Project (e.g. staging, or qa) choose **yes**. From there on leave as is for all CloudFormation Stack updates",
+            "Type": "String",
+            "Default": "yes",
+            "AllowedValues": [
+                "yes",
+                "no"
+            ]
+        },
+        "CreateS3ForLocal": {
+            "Description": "[FOR NON-PROD BUILD] Select **yes** if you want to create an S3 bucket for local development. The bucket will be called cat-{AppName}-local.",
+            "Type": "String",
+            "Default": "no",
+            "AllowedValues": [
+                "yes",
+                "no"
+            ]
+        },
+        "InstanceType": {
+            "Description": "WebServer EC2 instance type",
+            "Type": "String",
+            "Default": "m1.medium",
+            "AllowedValues": [
+                "t1.micro",
+                "t2.micro",
+                "t2.small",
+                "t2.medium",
+                "m1.small",
+                "m1.medium",
+                "m1.large"
+            ],
+            "ConstraintDescription": "must be a valid EC2 instance type."
+        },
+        "AMIID": {
+            "Description": "AMI ID to build the EC2 from. Default to empty Ubuntu box",
+            "Default": "ami-b2e3c6d8",
+            "Type": "String",
+            "MinLength": "1"
+        },
+        "KeyName": {
+            "Description": "Name of an EC2 KeyPair to enable SSH access to the instance.",
+            "Type": "AWS::EC2::KeyPair::KeyName",
+            "ConstraintDescription": "must be the name of an existing EC2 KeyPair.",
+            "MinLength": "1"
+        },
+        "SSHLocation": {
+            "Description": "The IP address range that can be used to access the web server using SSH eg 0.0.0.0/0 for any",
+            "Type": "String",
+            "MinLength": "9",
+            "MaxLength": "18",
+            "Default": "0.0.0.0/0",
+            "AllowedPattern": "(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})/(\\d{1,2})",
+            "ConstraintDescription": "must be a valid IP CIDR range of the form x.x.x.x/x."
+        }
+    },
+    "Outputs": {
+        "ActiveInstance": {
+            "Description": "The instance that is active, a or b",
+            "Value": "a"
+        },
+        "AppName": {
+            "Description": "Application Name / CodeDeploy Application Name",
+            "Value": {
+                "Ref": "AppName"
+            }
+        },
+        "AppEnv": {
+            "Description": "Application Env",
+            "Value": {
+                "Ref": "AppEnv"
+            }
+        },
+        "DeploymentGroupName": {
+            "Description": "CodeDeploy Deployment Group Name",
+            "Value": {
+                "Fn::Join": [
+                    "",
+                    [
+                        "For non-prod: ",
+                        {
+                            "Fn::Join": [
+                                "",
+                                [
+                                    {
+                                        "Ref": "AppEnv"
+                                    },
+                                    "-",
+                                    "a"
+                                ]
+                            ]
+                        },
+                        ". For production with shadow: ",
+                        {
+                            "Fn::Join": [
+                                "",
+                                [
+                                    "",
+                                    {
+                                        "Ref": "AppEnv"
+                                    },
+                                    "-",
+                                    "a",
+                                    " or ",
+                                    {
+                                        "Ref": "AppEnv"
+                                    },
+                                    "-b",
+                                    " depending on which ActiveInstance it is"
+                                ]
+                            ]
+                        }
+                    ]
+                ]
+            }
+        },
+        "CodeDeployBucket": {
+            "Description": "CodeDeploy bucket",
+            "Value": {
+                "Fn::Join": [
+                    "",
+                    [
+                        "cat-provision-config/",
+                        {
+                            "Ref": "AppName"
+                        },
+                        "/artifacts"
+                    ]
+                ]
+            }
+        },
+        "Region": {
+            "Description": "AWS Region",
+            "Value": {
+                "Ref": "AWS::Region"
+            }
+        },
+        "UserSettings": {
+            "Description": "UserSettings",
+            "Value": {
+                "Fn::Join": [
+                    "",
+                    [
+                        "https://console.aws.amazon.com/iam/home?region=us-east-1#users/",
+                        {
+                            "Ref": "AppUser"
+                        }
+                    ]
+                ]
+            }
+        },
+        "EC2Settings": {
+            "Description": "EC2 Settings",
+            "Value": {
+                "Fn::Join": [
+                    "",
+                    [
+                        "https://console.aws.amazon.com/ec2/v2/home?region=us-east-1#Instances:search=",
+                        {
+                            "Ref": "AppName"
+                        },
+                        "-",
+                        {
+                            "Ref": "AppEnv"
+                        }
+                    ]
+                ]
+            }
+        },
+        "AppUserName": {
+            "Description": "UserARN",
+            "Value": {
+                "Ref": "AppUser"
+            }
+        },
+        "AccessKeyForAppUser": {
+            "Description": "Key for User you only get this on creation of user",
+            "Value": {
+                "Ref": "UserAccessKey"
+            }
+        },
+        "SecretKeyForAppUser": {
+            "Description": "Secret for User you only get this on creation of user",
+            "Value": {
+                "Fn::GetAtt": [
+                    "UserAccessKey",
+                    "SecretAccessKey"
+                ]
+            }
+        },
+        "EnvWorker": {
+            "Description": "ENV for worker",
+            "Value": {
+                "Fn::GetAtt": [
+                    "EnvWorker",
+                    "Env"
+                ]
+            }
+        }
+    },
+    "Mappings": {
+        "AWSInstanceType2Arch": {
+            "t1.micro": {
+                "Arch": "PV64"
+            },
+            "t2.micro": {
+                "Arch": "HVM64"
+            },
+            "t2.small": {
+                "Arch": "HVM64"
+            },
+            "t2.medium": {
+                "Arch": "HVM64"
+            },
+            "m1.small": {
+                "Arch": "PV64"
+            },
+            "m1.medium": {
+                "Arch": "PV64"
+            },
+            "m1.large": {
+                "Arch": "PV64"
+            },
+            "m1.xlarge": {
+                "Arch": "PV64"
+            },
+            "m2.xlarge": {
+                "Arch": "PV64"
+            },
+            "m2.2xlarge": {
+                "Arch": "PV64"
+            },
+            "m2.4xlarge": {
+                "Arch": "PV64"
+            },
+            "m3.medium": {
+                "Arch": "HVM64"
+            },
+            "m3.large": {
+                "Arch": "HVM64"
+            },
+            "m3.xlarge": {
+                "Arch": "HVM64"
+            },
+            "m3.2xlarge": {
+                "Arch": "HVM64"
+            },
+            "c1.medium": {
+                "Arch": "PV64"
+            },
+            "c1.xlarge": {
+                "Arch": "PV64"
+            },
+            "c3.large": {
+                "Arch": "HVM64"
+            },
+            "c3.xlarge": {
+                "Arch": "HVM64"
+            },
+            "c3.2xlarge": {
+                "Arch": "HVM64"
+            },
+            "c3.4xlarge": {
+                "Arch": "HVM64"
+            },
+            "c3.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "c4.large": {
+                "Arch": "HVM64"
+            },
+            "c4.xlarge": {
+                "Arch": "HVM64"
+            },
+            "c4.2xlarge": {
+                "Arch": "HVM64"
+            },
+            "c4.4xlarge": {
+                "Arch": "HVM64"
+            },
+            "c4.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "g2.2xlarge": {
+                "Arch": "HVMG2"
+            },
+            "r3.large": {
+                "Arch": "HVM64"
+            },
+            "r3.xlarge": {
+                "Arch": "HVM64"
+            },
+            "r3.2xlarge": {
+                "Arch": "HVM64"
+            },
+            "r3.4xlarge": {
+                "Arch": "HVM64"
+            },
+            "r3.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "i2.xlarge": {
+                "Arch": "HVM64"
+            },
+            "i2.2xlarge": {
+                "Arch": "HVM64"
+            },
+            "i2.4xlarge": {
+                "Arch": "HVM64"
+            },
+            "i2.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "d2.xlarge": {
+                "Arch": "HVM64"
+            },
+            "d2.2xlarge": {
+                "Arch": "HVM64"
+            },
+            "d2.4xlarge": {
+                "Arch": "HVM64"
+            },
+            "d2.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "hi1.4xlarge": {
+                "Arch": "HVM64"
+            },
+            "hs1.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "cr1.8xlarge": {
+                "Arch": "HVM64"
+            },
+            "cc2.8xlarge": {
+                "Arch": "HVM64"
+            }
+        },
+        "AWSRegionArch2AMI": {
+            "us-east-1": {
+                "PV64": "ami-1ccae774",
+                "HVM64": "ami-1ecae776",
+                "HVMG2": "ami-8c6b40e4"
+            },
+            "us-west-2": {
+                "PV64": "ami-ff527ecf",
+                "HVM64": "ami-e7527ed7",
+                "HVMG2": "ami-abbe919b"
+            },
+            "us-west-1": {
+                "PV64": "ami-d514f291",
+                "HVM64": "ami-d114f295",
+                "HVMG2": "ami-f31ffeb7"
+            },
+            "eu-west-1": {
+                "PV64": "ami-bf0897c8",
+                "HVM64": "ami-a10897d6",
+                "HVMG2": "ami-d5bc24a2"
+            },
+            "eu-central-1": {
+                "PV64": "ami-ac221fb1",
+                "HVM64": "ami-a8221fb5",
+                "HVMG2": "ami-7cd2ef61"
+            },
+            "ap-northeast-1": {
+                "PV64": "ami-27f90e27",
+                "HVM64": "ami-cbf90ecb",
+                "HVMG2": "ami-6318e863"
+            },
+            "ap-southeast-1": {
+                "PV64": "ami-acd9e8fe",
+                "HVM64": "ami-68d8e93a",
+                "HVMG2": "ami-3807376a"
+            },
+            "ap-southeast-2": {
+                "PV64": "ami-ff9cecc5",
+                "HVM64": "ami-fd9cecc7",
+                "HVMG2": "ami-89790ab3"
+            },
+            "sa-east-1": {
+                "PV64": "ami-bb2890a6",
+                "HVM64": "ami-b52890a8",
+                "HVMG2": "NOT_SUPPORTED"
+            },
+            "cn-north-1": {
+                "PV64": "ami-fa39abc3",
+                "HVM64": "ami-f239abcb",
+                "HVMG2": "NOT_SUPPORTED"
+            }
+        }
+    }
+}

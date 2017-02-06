@@ -1,0 +1,21 @@
+{
+  "SQSFailedQueue": {
+    "Type": "AWS::SQS::Queue",
+    "Properties": {
+      "QueueName": {
+        "Fn::Join": [
+          "-",
+          [
+            {
+              "Ref": "AppName"
+            },
+            {
+              "Ref": "AppEnv"
+            },
+            "failed"
+          ]
+        ]
+      }
+    }
+  }
+}

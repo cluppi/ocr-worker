@@ -1,0 +1,31 @@
+{
+  "SQSJobQueue": {
+    "Type": "AWS::SQS::Queue",
+    "Properties": {
+      "QueueName": {
+        "Fn::Join": [
+          "-",
+          [
+            {
+              "Ref": "AppName"
+            },
+            {
+              "Ref": "AppEnv"
+            },
+            "job"
+          ]
+        ]
+      },
+      "RedrivePolicy": {
+        "deadLetterTargetArn": {
+          "Fn::GetAtt": [
+            "SQSFailedQueue",
+            "Arn"
+          ]
+        },
+        "maxReceiveCount": 3
+      },
+      "VisibilityTimeout": 600
+    }
+  }
+}

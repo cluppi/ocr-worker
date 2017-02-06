@@ -1,0 +1,58 @@
+{
+  "SQSQueuesPolicy": {
+    "Type": "AWS::IAM::Policy",
+    "Properties": {
+      "PolicyDocument": {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Resource": {
+              "Fn::Join": [
+                "",
+                [
+                  "arn:aws:sqs:us-east-1:086248658372:",
+                  {
+                    "Ref": "AppName"
+                  },
+                  "-",
+                  {
+                    "Ref": "AppEnv"
+                  },
+                  "-*"
+                ]
+              ]
+            },
+            "Action": [
+              "sqs:*"
+            ],
+            "Effect": "Allow"
+          }
+        ]
+      },
+      "PolicyName": {
+        "Fn::Join": [
+          "-",
+          [
+            "wildcard-access-to-sqs",
+            {
+              "Ref": "AppName"
+            },
+            {
+              "Ref": "AppEnv"
+            }
+          ]
+        ]
+      },
+      "Roles": [
+        {
+          "Ref": "RootRole"
+        }
+      ],
+      "Groups": [
+        {
+          "Ref": "AppGroup"
+        }
+      ]
+    }
+  }
+}
